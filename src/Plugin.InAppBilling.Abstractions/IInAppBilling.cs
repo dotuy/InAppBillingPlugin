@@ -1,4 +1,5 @@
 ﻿
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -9,6 +10,8 @@ namespace Plugin.InAppBilling.Abstractions
     /// </summary>
     public interface IInAppBilling
     {
+        void EnableInAppPurchases(Action<InAppBillingPurchase> onCompleted);
+
         /// <summary>
         /// Connect to billing service
         /// </summary>
@@ -37,6 +40,9 @@ namespace Plugin.InAppBilling.Abstractions
         /// <param name="verifyPurchase">Verify purchase implementation</param>
         /// <returns>The current purchases</returns>
         Task<IEnumerable<InAppBillingPurchase>> GetPurchasesAsync(ItemType itemType, IInAppBillingVerifyPurchase verifyPurchase = null);
+
+
+        Task<bool> ValidateReceipt(IInAppBillingVerifyPurchase verifyPurchase);
 
         /// <summary>
         /// Purchase a specific product or subscription

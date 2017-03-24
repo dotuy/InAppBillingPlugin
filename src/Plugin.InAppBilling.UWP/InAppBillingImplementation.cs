@@ -178,6 +178,16 @@ namespace Plugin.InAppBilling
                     return null;
             }
         }
+
+        public void EnableInAppPurchases(Action<InAppBillingPurchase> onCompleted)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<bool> ValidateReceipt(IInAppBillingVerifyPurchase verifyPurchase)
+        {
+            throw new NotImplementedException();
+        }
     }
 
     /// <summary>
@@ -234,11 +244,13 @@ namespace Plugin.InAppBilling
                 var xmlProductReceipt = xmlProductReceipts[i];
 
                 // Create new InAppBillingPurchase with values from the xml element
-                var purchase = new InAppBillingPurchase();
-                purchase.Id = xmlProductReceipt.Attributes["Id"].Value;
-                purchase.TransactionDateUtc = Convert.ToDateTime(xmlProductReceipt.Attributes["PurchaseDate"].Value);
-                purchase.ProductId = xmlProductReceipt.Attributes["ProductId"].Value;
-                purchase.AutoRenewing = false; // Not supported by UWP yet
+                var purchase = new InAppBillingPurchase()
+                {
+                    Id = xmlProductReceipt.Attributes["Id"].Value,
+                    TransactionDateUtc = Convert.ToDateTime(xmlProductReceipt.Attributes["PurchaseDate"].Value),
+                    ProductId = xmlProductReceipt.Attributes["ProductId"].Value,
+                    AutoRenewing = false // Not supported by UWP yet
+                };
                 purchase.PurchaseToken = purchase.Id;
                 // Map native UWP status to PurchaseState
                 switch (status)

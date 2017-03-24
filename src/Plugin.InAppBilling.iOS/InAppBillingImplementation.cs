@@ -3,6 +3,7 @@ using Plugin.InAppBilling.Abstractions;
 using StoreKit;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -19,7 +20,11 @@ namespace Plugin.InAppBilling
         /// </summary>
         public InAppBillingImplementation()
         {
-            paymentObserver = new PaymentObserver();
+        }
+
+        public void EnableInAppPurchases(Action<InAppBillingPurchase> onCompleted)
+        {
+            paymentObserver = new PaymentObserver(onCompleted);
             SKPaymentQueue.DefaultQueue.AddTransactionObserver(paymentObserver);
         }
 
@@ -63,13 +68,15 @@ namespace Plugin.InAppBilling
 
         Task<IEnumerable<SKProduct>> GetProductAsync(string[] productId)
         {
-            var productIdentifiers = NSSet.MakeNSObjectSet<NSString>(productId.Select(i => new NSString(i)).ToArray());
+            var productIdentifiers = new NSSet(productId);
 
             var productRequestDelegate = new ProductRequestDelegate();
 
             //set up product request for in-app purchase
-            var productsRequest = new SKProductsRequest(productIdentifiers);
-            productsRequest.Delegate = productRequestDelegate; // SKProductsRequestDelegate.ReceivedResponse
+            var productsRequest = new SKProductsRequest(productIdentifiers)
+            {
+                Delegate = productRequestDelegate // SKProductsRequestDelegate.ReceivedResponse
+            };
             productsRequest.Start();
 
             return productRequestDelegate.WaitForResponse();
@@ -85,11 +92,19 @@ namespace Plugin.InAppBilling
         public async Task<IEnumerable<InAppBillingPurchase>> GetPurchasesAsync(ItemType itemType, IInAppBillingVerifyPurchase verifyPurchase = null)
         {
             var purchases = await RestoreAsync();
-
-            return purchases.Where(p => p != null).Select(p => p.ToIABPurchase());
+            var validated = await ValidateReceipt(verifyPurchase);
+            return validated ? purchases.Where(p => p != null).Select(p => p.ToIABPurchase()) : null;
         }
 
-
+        public Task<bool> ValidateReceipt(IInAppBillingVerifyPurchase verifyPurchase)
+        {
+            if (verifyPurchase == null) return Task.FromResult(false);
+            // Get the receipt data for (server-side) validation.
+            // See: https://developer.apple.com/library/content/releasenotes/General/ValidateAppStoreReceipt/Introduction.html#//apple_ref/doc/uid/TP40010573
+            var receiptUrl = NSData.FromUrl(NSBundle.MainBundle.AppStoreReceiptUrl);
+            string receipt = receiptUrl.GetBase64EncodedString(NSDataBase64EncodingOptions.None);
+            return verifyPurchase.VerifyPurchase(receipt, string.Empty);
+        }
 
         Task<SKPaymentTransaction[]> RestoreAsync()
         {
@@ -106,9 +121,6 @@ namespace Plugin.InAppBilling
                     tcsTransaction.TrySetException(new Exception("Restore Transactions Failed"));
                 else
                 {
-                    //look through and make sure everything is finished.
-                    foreach (var t in transactions)
-                        SKPaymentQueue.DefaultQueue.FinishTransaction(t);
 
                     tcsTransaction.TrySetResult(transactions);
                 }
@@ -137,29 +149,27 @@ namespace Plugin.InAppBilling
         public async Task<InAppBillingPurchase> PurchaseAsync(string productId, ItemType itemType, string payload, IInAppBillingVerifyPurchase verifyPurchase = null)
         {
             var p = await PurchaseAsync(productId);
+            if (p == null)
+            {
+                return null;
+            }
+            var purchase = p.ToIABPurchase();
 
+            var validated = await ValidateReceipt(verifyPurchase);
+            return validated ? purchase : null;
+        }
+
+        private InAppBillingPurchase ToIABP(SKPaymentTransaction transaction)
+        {
             var reference = new DateTime(2001, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
 
-            var purchase = new InAppBillingPurchase
+            return new InAppBillingPurchase
             {
-                TransactionDateUtc = reference.AddSeconds(p.TransactionDate.SecondsSinceReferenceDate),
-                Id = p.TransactionIdentifier,
-                ProductId = p.Payment?.ProductIdentifier ?? string.Empty,
-                State = p.GetPurchaseState()
+                TransactionDateUtc = reference.AddSeconds(transaction.TransactionDate.SecondsSinceReferenceDate),
+                Id = transaction.TransactionIdentifier,
+                ProductId = transaction.Payment?.ProductIdentifier ?? string.Empty,
+                State = transaction.GetPurchaseState()
             };
-
-            if (verifyPurchase == null)
-                return purchase;
-
-            // Get the receipt data for (server-side) validation.
-            // See: https://developer.apple.com/library/content/releasenotes/General/ValidateAppStoreReceipt/Introduction.html#//apple_ref/doc/uid/TP40010573
-            var receiptUrl = NSData.FromUrl(NSBundle.MainBundle.AppStoreReceiptUrl);
-            string receipt = receiptUrl.GetBase64EncodedString(NSDataBase64EncodingOptions.None);
-
-            var validated = await verifyPurchase.VerifyPurchase(receipt, string.Empty);
-           
-
-            return validated ? purchase : null;
         }
 
         Task<SKPaymentTransaction> PurchaseAsync(string productId)
@@ -170,19 +180,26 @@ namespace Plugin.InAppBilling
             handler = new Action<SKPaymentTransaction, bool>((tran, success) =>
             {
 
-                //Make sure we finigh the transaction
-                SKPaymentQueue.DefaultQueue.FinishTransaction(tran);
 
-                // Only handle results from this request
-                if (productId != tran.Payment.ProductIdentifier)
+        // Only handle results from this request
+        if (productId != tran.Payment.ProductIdentifier)
                     return;
 
-                // Unsubscribe from future events
-                paymentObserver.TransactionCompleted -= handler;
+        // Unsubscribe from future events
+        paymentObserver.TransactionCompleted -= handler;
 
 
                 if (!success)
-                    tcsTransaction.TrySetException(new Exception(tran?.Error.LocalizedDescription));
+                {
+                    if (tran?.Error.Code == 2)
+                    {
+                        tcsTransaction.TrySetResult(null);
+                    }
+                    else
+                    {
+                        tcsTransaction.TrySetException(new Exception(tran?.Error.LocalizedDescription));
+                    }
+                }
                 else
                     tcsTransaction.TrySetResult(tran);
             });
@@ -272,7 +289,12 @@ namespace Plugin.InAppBilling
         public event Action<SKPaymentTransaction[]> TransactionsRestored;
 
         List<SKPaymentTransaction> restoredTransactions = new List<SKPaymentTransaction>();
+        private readonly Action<InAppBillingPurchase> onSuccess;
 
+        public PaymentObserver(Action<InAppBillingPurchase> onSuccess = null)
+        {
+            this.onSuccess = onSuccess;
+        }
         public override void UpdatedTransactions(SKPaymentQueue queue, SKPaymentTransaction[] transactions)
         {
             var rt = transactions.Where(pt => pt.TransactionState == SKPaymentTransactionState.Restored);
@@ -285,13 +307,25 @@ namespace Plugin.InAppBilling
 
             foreach (SKPaymentTransaction transaction in transactions)
             {
+                Debug.WriteLine($"Found transaction state: {transaction.TransactionState} id: {transaction.TransactionIdentifier}");
                 switch (transaction.TransactionState)
                 {
                     case SKPaymentTransactionState.Purchased:
-                        TransactionCompleted?.Invoke(transaction, true);
+
+                        if (TransactionCompleted != null)
+                        {
+                            TransactionCompleted.Invoke(transaction, true);
+                        }
+                        else
+                        {
+                            onSuccess?.Invoke(transaction.ToIABPurchase());
+                        }
+                        Debug.WriteLine($"Transaction purchased finished id: {transaction.TransactionIdentifier}");
+                        SKPaymentQueue.DefaultQueue.FinishTransaction(transaction);
                         break;
                     case SKPaymentTransactionState.Failed:
                         TransactionCompleted?.Invoke(transaction, false);
+                        SKPaymentQueue.DefaultQueue.FinishTransaction(transaction);
                         break;
                     default:
                         break;
@@ -308,6 +342,12 @@ namespace Plugin.InAppBilling
             restoredTransactions.Clear();
 
             TransactionsRestored?.Invoke(rt);
+
+            foreach (var transaction in rt)
+            {
+                Debug.WriteLine($"Transaction restored finished id: {transaction.TransactionIdentifier}");
+                SKPaymentQueue.DefaultQueue.FinishTransaction(transaction);
+            }
         }
 
         public override void RestoreCompletedTransactionsFailedWithError(SKPaymentQueue queue, Foundation.NSError error)
@@ -352,9 +392,6 @@ namespace Plugin.InAppBilling
 
         public static PurchaseState GetPurchaseState(this SKPaymentTransaction transaction)
         {
-            if (transaction.TransactionState == null)
-                return Abstractions.PurchaseState.Unknown;
-
             switch (transaction.TransactionState)
             {
                 case SKPaymentTransactionState.Restored:
@@ -391,10 +428,12 @@ namespace Plugin.InAppBilling
         /// </remarks>
         public static string LocalizedPrice(this SKProduct product)
         {
-            var formatter = new NSNumberFormatter();
-            formatter.FormatterBehavior = NSNumberFormatterBehavior.Version_10_4;
-            formatter.NumberStyle = NSNumberFormatterStyle.Currency;
-            formatter.Locale = product.PriceLocale;
+            var formatter = new NSNumberFormatter()
+            {
+                FormatterBehavior = NSNumberFormatterBehavior.Version_10_4,
+                NumberStyle = NSNumberFormatterStyle.Currency,
+                Locale = product.PriceLocale
+            };
             var formattedString = formatter.StringFromNumber(product.Price);
             Console.WriteLine(" ** formatter.StringFromNumber(" + product.Price + ") = " + formattedString + " for locale " + product.PriceLocale.LocaleIdentifier);
             return formattedString;
