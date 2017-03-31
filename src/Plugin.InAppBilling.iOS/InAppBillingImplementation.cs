@@ -101,8 +101,22 @@ namespace Plugin.InAppBilling
             if (verifyPurchase == null) return Task.FromResult(false);
             // Get the receipt data for (server-side) validation.
             // See: https://developer.apple.com/library/content/releasenotes/General/ValidateAppStoreReceipt/Introduction.html#//apple_ref/doc/uid/TP40010573
-            var receiptUrl = NSData.FromUrl(NSBundle.MainBundle.AppStoreReceiptUrl);
-            string receipt = receiptUrl.GetBase64EncodedString(NSDataBase64EncodingOptions.None);
+            string receipt = default(string);
+            try
+            {
+                var url = NSBundle.MainBundle.AppStoreReceiptUrl;
+                if (!NSFileManager.DefaultManager.FileExists(url.Path))
+                {
+                    var receiptUrl = NSData.FromUrl(url);
+                    if (receiptUrl != null)
+                    {
+                        receipt = receiptUrl.GetBase64EncodedString(NSDataBase64EncodingOptions.None);
+                    }
+                }
+            } catch(Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+            }
             return verifyPurchase.VerifyPurchase(receipt, string.Empty);
         }
 
@@ -181,12 +195,12 @@ namespace Plugin.InAppBilling
             {
 
 
-        // Only handle results from this request
-        if (productId != tran.Payment.ProductIdentifier)
+                // Only handle results from this request
+                if (productId != tran.Payment.ProductIdentifier)
                     return;
 
-        // Unsubscribe from future events
-        paymentObserver.TransactionCompleted -= handler;
+                // Unsubscribe from future events
+                paymentObserver.TransactionCompleted -= handler;
 
 
                 if (!success)
