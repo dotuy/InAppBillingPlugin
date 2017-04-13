@@ -24,6 +24,7 @@ namespace Plugin.InAppBilling
 
         public void EnableInAppPurchases(Action<InAppBillingPurchase> onCompleted)
         {
+
             paymentObserver = new PaymentObserver(onCompleted);
             SKPaymentQueue.DefaultQueue.AddTransactionObserver(paymentObserver);
         }
@@ -91,6 +92,7 @@ namespace Plugin.InAppBilling
         /// <returns>The current purchases</returns>
         public async Task<IEnumerable<InAppBillingPurchase>> GetPurchasesAsync(ItemType itemType, IInAppBillingVerifyPurchase verifyPurchase = null)
         {
+            Debug.WriteLine($"Get purchases. {verifyPurchase == null}");
             var purchases = await RestoreAsync();
             var validated = await ValidateReceipt(verifyPurchase);
             return validated ? purchases.Where(p => p != null).Select(p => p.ToIABPurchase()) : null;
@@ -98,6 +100,8 @@ namespace Plugin.InAppBilling
 
         public Task<bool> ValidateReceipt(IInAppBillingVerifyPurchase verifyPurchase)
         {
+            Debug.WriteLine($"ValidateReceipt. {verifyPurchase == null}");
+
             if (verifyPurchase == null) return Task.FromResult(false);
             // Get the receipt data for (server-side) validation.
             // See: https://developer.apple.com/library/content/releasenotes/General/ValidateAppStoreReceipt/Introduction.html#//apple_ref/doc/uid/TP40010573
@@ -105,12 +109,15 @@ namespace Plugin.InAppBilling
             try
             {
                 var url = NSBundle.MainBundle.AppStoreReceiptUrl;
-                if (!NSFileManager.DefaultManager.FileExists(url.Path))
+                Debug.WriteLine(url);
+                if (NSFileManager.DefaultManager.FileExists(url.Path))
                 {
                     var receiptUrl = NSData.FromUrl(url);
+                    Debug.WriteLine(receiptUrl);
                     if (receiptUrl != null)
                     {
                         receipt = receiptUrl.GetBase64EncodedString(NSDataBase64EncodingOptions.None);
+                        Debug.WriteLine(receipt);
                     }
                 }
             } catch(Exception ex)
@@ -162,6 +169,8 @@ namespace Plugin.InAppBilling
         /// <returns></returns>
         public async Task<InAppBillingPurchase> PurchaseAsync(string productId, ItemType itemType, string payload, IInAppBillingVerifyPurchase verifyPurchase = null)
         {
+            Debug.WriteLine($"PurchaseAsync. {verifyPurchase == null}");
+
             var p = await PurchaseAsync(productId);
             if (p == null)
             {

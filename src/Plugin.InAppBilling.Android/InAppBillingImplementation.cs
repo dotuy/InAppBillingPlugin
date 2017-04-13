@@ -487,6 +487,42 @@ namespace Plugin.InAppBilling
             return 6; // Unknown error
         }
 
+        public void EnableInAppPurchases(Action<InAppBillingPurchase> onCompleted)
+        {
+            
+        }
+
+        public async Task<bool> ValidateReceipt(IInAppBillingVerifyPurchase verifyPurchase)
+        {
+            Bundle ownedItems = serviceConnection.Service.GetPurchases(3, Context.PackageName, ITEM_TYPE_SUBSCRIPTION, null);
+            var response = GetResponseCodeFromBundle(ownedItems);
+
+            if (response != 0)
+            {
+                return false;
+            }
+
+            if (!ValidOwnedItems(ownedItems))
+            {
+                Console.WriteLine("Invalid purchases");
+                return false;
+            }
+
+            var items = ownedItems.GetStringArrayList(RESPONSE_IAP_PURCHASE_ITEM_LIST);
+            var dataList = ownedItems.GetStringArrayList(RESPONSE_IAP_PURCHASE_DATA_LIST);
+            var signatures = ownedItems.GetStringArrayList(RESPONSE_IAP_DATA_SIGNATURE_LIST);
+            bool isValid = false;
+            for (int i = 0; i < items.Count; i++)
+            {
+                string data = dataList[i];
+                string sign = signatures[i];
+
+                isValid = await verifyPurchase.VerifyPurchase(data, sign);
+                if (!isValid) return false;
+            }
+            return isValid;
+        }
+
         [Preserve(AllMembers = true)]
         class InAppBillingServiceConnection : Java.Lang.Object, IServiceConnection
         {
